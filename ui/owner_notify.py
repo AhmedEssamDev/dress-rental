@@ -43,6 +43,10 @@ def notify_owner_action(db, action_type, record):
         remaining = total - paid
         msg += f"المتبقي: {remaining:,.0f} ج\n"
         
+        registrar = record.get('registrar_name')
+        if registrar:
+            msg += f"بواسطة (الكاشير): {registrar}\n"
+        
         msg += "\n📊 إحصائيات اليوم حتى الآن:\n"
         msg += f"إيرادات اليوم: {stats.get('today_revenue', 0):,.0f} ج\n"
         msg += f"إجمالي الإيرادات (الشهر): {stats.get('monthly_revenue', 0):,.0f} ج\n"

@@ -116,6 +116,12 @@ class Database:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS notification_dismissals (
+                type TEXT NOT NULL,
+                record_id INTEGER NOT NULL,
+                PRIMARY KEY (type, record_id)
+            );
         """)
         self.conn.commit()
         self._migrate()
@@ -137,6 +143,13 @@ class Database:
         # Free up codes for already archived dresses
         self.conn.execute("UPDATE dresses SET code = code || '-deleted-' || id WHERE is_archived = 1 AND code NOT LIKE '%-deleted-%'")
         self.conn.commit()
+        
+        # TEMPORARY RESTORE FIX: If user accidentally cancelled or dismissed today's notifications while testing
+        from datetime import date
+        today_iso = date.today().isoformat()
+        self.conn.execute("UPDATE bookings SET status='active' WHERE status='cancelled' AND event_date=?", (today_iso,))
+        self.conn.execute("DELETE FROM notification_dismissals")
+        self.conn.commit()
 
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS registrars (
@@ -153,6 +166,11 @@ class Database:
         booking_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(bookings)").fetchall()}
         if "registered_by_id" not in booking_cols:
             self.conn.execute("ALTER TABLE bookings ADD COLUMN registered_by_id INTEGER REFERENCES registrars(id)")
+            self.conn.commit()
+
+        rental_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(rentals)").fetchall()}
+        if "registered_by_id" not in rental_cols:
+            self.conn.execute("ALTER TABLE rentals ADD COLUMN registered_by_id INTEGER REFERENCES registrars(id)")
             self.conn.commit()
 
         # Ensure settings table exists and default password is set
@@ -278,19 +296,26 @@ class Database:
                           (code, name, size, color, category, rental_price, deposit, description, did))
         self.conn.commit()
 
-    def delete_dress(self, did):
+    def delete_dress(self, did, force=False):
         dress = self.get_dress(did)
         rent_map, book_map = self._count_dress_links(did)
         linked_msg = self._format_link_message(rent_map, book_map)
-        if linked_msg:
+        if linked_msg and not force:
             return False, f"لا يمكن حذف الفستان. {linked_msg}"
         try:
+            if force:
+                # Cascade delete
+                self.conn.execute("DELETE FROM payments WHERE rental_id IN (SELECT id FROM rentals WHERE dress_id=?)", (did,))
+                self.conn.execute("DELETE FROM rentals WHERE dress_id=?", (did,))
+                self.conn.execute("DELETE FROM bookings WHERE dress_id=?", (did,))
+                
             self.conn.execute("DELETE FROM dresses WHERE id=?", (did,))
             self.conn.execute("UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id), 0) FROM dresses) WHERE name = 'dresses'")
             self.conn.commit()
         except sqlite3.IntegrityError:
-            return False, "لا يمكن حذف الفستان لأنه مرتبط بعمليات (تأجير/حجز) مسجلة."
+            return False, "لا يمكن حذف الفستان لأنه مرتبط بعمليات مسجلة. يرجى تفعيل خيار الحذف الإجباري."
         if dress and dress["image_path"]:
+            from image_utils import delete_dress_image
             delete_dress_image(dress["image_path"])
         return True, None
 
@@ -438,15 +463,15 @@ class Database:
 
     # ───────────── RENTALS ─────────────
     def add_rental(self, dress_id, customer_id, rental_date, expected_return_date,
-                   rental_price, deposit, discount, total_amount, paid_amount, notes=""):
+                   rental_price, deposit, discount, total_amount, paid_amount, notes="", registered_by_id=None):
         c = self.conn.cursor()
         # Keep ledger consistent: rental starts with zero paid, then payment rows adjust it.
         remaining = total_amount
         c.execute("""INSERT INTO rentals
-                     (dress_id,customer_id,rental_date,expected_return_date,rental_price,
+                     (dress_id,customer_id,registered_by_id,rental_date,expected_return_date,rental_price,
                       deposit,discount,total_amount,paid_amount,remaining_amount,notes)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                  (dress_id, customer_id, rental_date, expected_return_date,
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (dress_id, customer_id, registered_by_id, rental_date, expected_return_date,
                    rental_price, deposit, discount, total_amount, 0, remaining, notes))
         self.conn.commit()
         rid = c.lastrowid
@@ -456,7 +481,7 @@ class Database:
         return rid
 
     def update_rental(self, rid, dress_id, customer_id, rental_date, expected_return_date,
-                      rental_price, deposit, discount, total_amount, paid_amount, notes=""):
+                      rental_price, deposit, discount, total_amount, paid_amount, notes="", registered_by_id=None):
         old = self.get_rental(rid)
         if not old:
             return False, "التأجير غير موجود"
@@ -478,11 +503,11 @@ class Database:
         current = self.get_rental(rid)
         synced_paid = current['paid_amount'] if current else old_paid
         remaining = max(0, total_amount - synced_paid)
-        self.conn.execute("""UPDATE rentals SET dress_id=?, customer_id=?, rental_date=?, 
+        self.conn.execute("""UPDATE rentals SET dress_id=?, customer_id=?, registered_by_id=?, rental_date=?, 
                              expected_return_date=?, rental_price=?, deposit=?, discount=?, 
                              total_amount=?, paid_amount=?, remaining_amount=?, notes=?
                              WHERE id=?""",
-                          (dress_id, customer_id, rental_date, expected_return_date,
+                          (dress_id, customer_id, registered_by_id, rental_date, expected_return_date,
                            rental_price, deposit, discount, total_amount, synced_paid, remaining, notes, rid))
         self.conn.commit()
         return True, None
@@ -525,10 +550,12 @@ class Database:
 
     def get_all_rentals(self, status=None, search=None, limit=None, offset=0):
         q = """SELECT r.*,d.name as dress_name,d.code as dress_code,d.image_path as dress_image_path,
-                      c.name as customer_name,c.phone as customer_phone
+                      c.name as customer_name,c.phone as customer_phone,
+                      reg.name as registrar_name
                FROM rentals r
                JOIN dresses d ON r.dress_id=d.id
                JOIN customers c ON r.customer_id=c.id
+               LEFT JOIN registrars reg ON r.registered_by_id=reg.id
                WHERE 1=1"""
         p = []
         if status:
@@ -559,10 +586,12 @@ class Database:
     def get_rental(self, rid):
         return self.conn.execute("""
             SELECT r.*,d.name as dress_name,d.code as dress_code,d.size,d.color,d.image_path,
-                   c.name as customer_name,c.phone as customer_phone,c.address
+                   c.name as customer_name,c.phone as customer_phone,c.address,
+                   reg.name as registrar_name
             FROM rentals r
             JOIN dresses d ON r.dress_id=d.id
             JOIN customers c ON r.customer_id=c.id
+            LEFT JOIN registrars reg ON r.registered_by_id=reg.id
             WHERE r.id=?""", (rid,)).fetchone()
 
     def get_overdue_rentals(self):
@@ -812,6 +841,61 @@ class Database:
                ORDER BY b.event_date ASC""",
             (today.isoformat(), target_date.isoformat()),
         ).fetchall()
+
+    def get_notifications(self):
+        from datetime import date, timedelta
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        # حجوزات اليوم وغداً
+        bookings = self.conn.execute(
+            """SELECT 'booking' as type, b.event_date, b.id, d.name as dress_name, d.code as dress_code,
+                      c.name as customer_name, c.phone as customer_phone, reg.name as registrar_name
+               FROM bookings b
+               JOIN dresses d ON b.dress_id=d.id
+               JOIN customers c ON b.customer_id=c.id
+               LEFT JOIN registrars reg ON b.registered_by_id=reg.id
+               WHERE b.status='active'
+                 AND (b.event_date = ? OR b.event_date = ?)
+                 AND NOT EXISTS (SELECT 1 FROM notification_dismissals nd WHERE nd.type='booking' AND nd.record_id=b.id)
+            """, (today.isoformat(), tomorrow.isoformat())
+        ).fetchall()
+        
+        # تسليم تأجيرات (تأجيرات تبدأ اليوم أو غداً)
+        deliveries = self.conn.execute(
+            """SELECT 'delivery' as type, r.rental_date as event_date, r.id, d.name as dress_name, d.code as dress_code,
+                      c.name as customer_name, c.phone as customer_phone, reg.name as registrar_name
+               FROM rentals r
+               JOIN dresses d ON r.dress_id=d.id
+               JOIN customers c ON r.customer_id=c.id
+               LEFT JOIN registrars reg ON r.registered_by_id=reg.id
+               WHERE r.status='active'
+                 AND (r.rental_date = ? OR r.rental_date = ?)
+                 AND NOT EXISTS (SELECT 1 FROM notification_dismissals nd WHERE nd.type='delivery' AND nd.record_id=r.id)
+            """, (today.isoformat(), tomorrow.isoformat())
+        ).fetchall()
+        
+        # إرجاعات اليوم أو المتأخرة
+        rentals = self.conn.execute(
+            """SELECT 'rental' as type, r.expected_return_date as event_date, r.id, d.name as dress_name, d.code as dress_code,
+                      c.name as customer_name, c.phone as customer_phone, reg.name as registrar_name
+               FROM rentals r
+               JOIN dresses d ON r.dress_id=d.id
+               JOIN customers c ON r.customer_id=c.id
+               LEFT JOIN registrars reg ON r.registered_by_id=reg.id
+               WHERE r.status='active'
+                 AND r.expected_return_date <= ?
+                 AND NOT EXISTS (SELECT 1 FROM notification_dismissals nd WHERE nd.type='rental' AND nd.record_id=r.id)
+            """, (today.isoformat(),)
+        ).fetchall()
+        
+        combined = [dict(x) for x in bookings] + [dict(x) for x in deliveries] + [dict(x) for x in rentals]
+        combined.sort(key=lambda x: (x['event_date'], x['id']), reverse=True)
+        return combined
+
+    def dismiss_notification(self, n_type, record_id):
+        self.conn.execute("INSERT OR IGNORE INTO notification_dismissals (type, record_id) VALUES (?, ?)", (n_type, record_id))
+        self.conn.commit()
 
     def update_booking(self, bid, dress_id, customer_id, reservation_date, event_date,
                        rental_price, deposit=0, expected_return_date=None, notes="",

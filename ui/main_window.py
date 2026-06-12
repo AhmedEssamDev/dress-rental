@@ -1,209 +1,179 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-                             QLabel, QPushButton, QStackedWidget, QFrame, QSizePolicy,
-                             QScrollArea)
-from PyQt6.QtCore import Qt, QTimer, QEasingCurve, QPropertyAnimation
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QGraphicsOpacityEffect
-from datetime import datetime
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QStackedWidget, QLabel, QFrame, QPushButton, QDialog,
+                             QListWidget, QListWidgetItem, QMessageBox)
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QFont, QPixmap, QIcon
 
+from ui.cashier import CashierWidget
+import os
+
+class NotificationsDialog(QDialog):
+    def __init__(self, parent, db):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("🔔 إشعارات المناسبات القريبة")
+        self.setMinimumSize(500, 400)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._build()
+
+    def _build(self):
+        lay = QVBoxLayout(self)
+        
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet("""
+            QListWidget { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 8px; }
+            QListWidget::item { border-bottom: 1px solid #E2E8F0; }
+        """)
+        lay.addWidget(self.list_widget)
+        
+        notifs = self.db.get_notifications()
+        if not notifs:
+            self.list_widget.addItem("لا توجد إشعارات حالية.")
+        else:
+            from datetime import date
+            today = date.today().isoformat()
+            for n in notifs:
+                event_date = n['event_date']
+                if event_date == today:
+                    status = "🔴 اليوم"
+                elif event_date > today:
+                    status = f"🟡 القادم ({event_date})"
+                else:
+                    status = f"⚫ متأخر ({event_date})"
+                if n.get('type') == 'booking':
+                    kind = "تسليم (حجز)"
+                elif n.get('type') == 'delivery':
+                    kind = "تسليم (تأجير)"
+                else:
+                    kind = "إرجاع (تأجير)"
+                txt = f"{status} - {kind} - {n['dress_name']} ({n['dress_code']})\nالعميل: {n['customer_name']} | رقم الهاتف: {n['customer_phone']}\nبواسطة: {n['registrar_name'] or 'غير محدد'}"
+                
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, dict(n))
+                
+                w = QWidget()
+                w_lay = QHBoxLayout(w)
+                w_lay.setContentsMargins(5, 5, 5, 5)
+                
+                del_btn = QPushButton("🗑️")
+                del_btn.setStyleSheet("background-color: transparent; border: none; font-size: 18px; color: #EF4444;")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                del_btn.clicked.connect(lambda checked, i=item: self._delete_item(i))
+                
+                lbl = QLabel(txt)
+                lbl.setStyleSheet("font-size: 13px; color: #1E293B;")
+                
+                w_lay.addWidget(lbl)
+                w_lay.addStretch()
+                w_lay.addWidget(del_btn)
+                
+                item.setSizeHint(QSize(0, 80))
+                self.list_widget.addItem(item)
+                self.list_widget.setItemWidget(item, w)
+                
+        btns_lay = QHBoxLayout()
+        btns_lay.addStretch()
+        
+        close_btn = QPushButton("إغلاق")
+        close_btn.setStyleSheet("background-color: #4A4543; color: white; padding: 8px; border-radius: 6px; font-weight: bold;")
+        close_btn.clicked.connect(self.accept)
+        btns_lay.addWidget(close_btn)
+        
+        lay.addLayout(btns_lay)
+
+    def _delete_item(self, item):
+        n = item.data(Qt.ItemDataRole.UserRole)
+        self.db.dismiss_notification(n['type'], n['id'])
+        
+        row = self.list_widget.row(item)
+        self.list_widget.takeItem(row)
 
 class MainWindow(QMainWindow):
     def __init__(self, db):
         super().__init__()
         self.db = db
-        self.setWindowTitle("نظام تأجير الفساتين")
+        self.setWindowTitle("نظام الكاشير - تأجير الفساتين")
         self.setMinimumSize(1200, 750)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self._build_ui()
-        self._setup_clock()
-        self.nav_buttons[0].setChecked(True)
-        self._page_fade_anim = None
-
-        QTimer.singleShot(1000, self._check_upcoming_alerts)
-
-    def _check_upcoming_alerts(self):
-        # Check for bookings happening within 1 day (today or tomorrow)
-        near_bookings = self.db.get_upcoming_bookings(1)
-        if near_bookings:
-            from PyQt6.QtWidgets import QMessageBox, QApplication
-            count = len(near_bookings)
-            msg = f"🚨 إنذار هام: لديك {count} حجز (فساتين) يجب تسليمها غداً أو اليوم!\nيرجى مراجعة صفحة الحجوزات أو لوحة التحكم للتفاصيل."
-            
-            QApplication.beep()
-            try:
-                import winsound
-                winsound.PlaySound("SystemHand", winsound.SND_ALIAS | winsound.SND_ASYNC)
-            except:
-                pass
-            
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setWindowTitle("إنذار تسليم الفساتين")
-            box.setText(msg)
-            box.setStyleSheet("QLabel { font-size: 15px; font-weight: bold; color: #D32F2F; }")
-            box.exec()
+        self._update_notifications()
 
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        main_lay = QHBoxLayout(central)
+        main_lay = QVBoxLayout(central)
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.setSpacing(0)
+        
+        # Header
+        header = QFrame()
+        header.setStyleSheet("background-color: #1E3A8A; color: white;")
+        header.setFixedHeight(60)
+        hdr_lay = QHBoxLayout(header)
+        hdr_lay.setContentsMargins(20, 0, 20, 0)
+        
+        # Logo
+        logo_lbl = QLabel()
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "images", "logo.jpeg")
+        if os.path.exists(logo_path):
+            pix = QPixmap(logo_path)
+            logo_lbl.setPixmap(pix.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        hdr_lay.addWidget(logo_lbl)
+        
+        title = QLabel("نظام تأجير الفساتين - الكاشير")
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        hdr_lay.addWidget(title)
+        
+        hdr_lay.addStretch()
+        
+        # Notifications Button
+        self.notif_btn = QPushButton("🔔 الإشعارات")
+        self.notif_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3B82F6; color: white; font-weight: bold; padding: 8px 15px;
+                border-radius: 6px; border: none;
+            }
+            QPushButton:hover { background-color: #2563EB; }
+        """)
+        self.notif_btn.clicked.connect(self._show_notifications)
+        hdr_lay.addWidget(self.notif_btn)
+        
+        main_lay.addWidget(header)
 
-        # ── Sidebar ──
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(232)
-        sidebar_lay = QVBoxLayout(sidebar)
-        sidebar_lay.setContentsMargins(0, 0, 0, 0)
-        sidebar_lay.setSpacing(0)
-
-        # Logo area
-        logo_frame = QFrame()
-        logo_frame.setObjectName("sidebar_logo_frame")
-        logo_lay = QVBoxLayout(logo_frame)
-        logo_lay.setContentsMargins(15, 20, 15, 15)
-
-        logo_icon = QLabel("👗")
-        logo_icon.setObjectName("sidebar_logo_icon")
-        logo_icon.setFont(QFont("Segoe UI Emoji", 30))
-        logo_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        shop_name = QLabel("محل تأجير الفساتين")
-        shop_name.setObjectName("sidebar_shop_name")
-        shop_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.clock_lbl = QLabel("")
-        self.clock_lbl.setObjectName("sidebar_clock")
-        self.clock_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        logo_lay.addWidget(logo_icon)
-        logo_lay.addWidget(shop_name)
-        logo_lay.addWidget(self.clock_lbl)
-        sidebar_lay.addWidget(logo_frame)
-
-        # Separator
-        sep = QFrame(); sep.setFixedHeight(1)
-        sep.setStyleSheet("background:#3E3632;")
-        sidebar_lay.addWidget(sep)
-
-        # Nav buttons
-        nav_items = [
-            ("🏠", "لوحة التحكم", 0),
-            ("👗", "الفساتين", 1),
-            ("👥", "العملاء", 2),
-            ("📅", "الحجوزات", 3),
-            ("🧑‍💼", "المسجّلون", 4),
-            ("📦", "التأجيرات", 5),
-            ("📊", "التقارير", 6),
-        ]
-
-        self.nav_buttons = []
-        for icon, label, idx in nav_items:
-            btn = QPushButton(f"  {icon}   {label}")
-            btn.setObjectName("nav_btn")
-            btn.setCheckable(True)
-            btn.setAutoExclusive(True)
-            btn.setFixedHeight(52)
-            btn.setFont(QFont("Segoe UI", 12))
-            btn.clicked.connect(lambda checked, i=idx: self._switch_page(i))
-            sidebar_lay.addWidget(btn)
-            self.nav_buttons.append(btn)
-
-        sidebar_lay.addStretch()
-
-        # Bottom info
-        bottom = QLabel("نسخة 1.0\nجميع الحقوق محفوظة")
-        bottom.setObjectName("sidebar_bottom_info")
-        bottom.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sidebar_lay.addWidget(bottom)
-
-        main_lay.addWidget(sidebar)
-
-        # ── Content area ──
         self.stack = QStackedWidget()
         self.stack.setStyleSheet("background-color: #F7F4F0;")
         main_lay.addWidget(self.stack)
 
-        # Create pages
-        from ui.dashboard import DashboardWidget
-        from ui.dresses import DressesWidget
-        from ui.customers import CustomersWidget
-        from ui.bookings import BookingsWidget
-        from ui.registrars import RegistrarsWidget
-        from ui.rentals import RentalsWidget
-        from ui.reports import ReportsWidget
+        self.cashier = CashierWidget(db=self.db)
+        self.stack.addWidget(self.cashier)
 
-        self.dashboard = DashboardWidget(db=self.db, switch_fn=self._switch_page)
-        self.dresses = DressesWidget(db=self.db)
-        self.customers = CustomersWidget(db=self.db)
-        self.bookings = BookingsWidget(db=self.db)
-        self.registrars = RegistrarsWidget(db=self.db)
-        self.rentals = RentalsWidget(db=self.db)
-        self.reports = ReportsWidget(db=self.db)
+    def _update_notifications(self):
+        notifs = self.db.get_notifications()
+        count = len(notifs)
+        if count > 0:
+            self.notif_btn.setText(f"🔔 الإشعارات ({count})")
+            self.notif_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #EF4444; color: white; font-weight: bold; padding: 8px 15px;
+                    border-radius: 6px; border: none;
+                }
+                QPushButton:hover { background-color: #DC2626; }
+            """)
+        else:
+            self.notif_btn.setText("🔔 الإشعارات")
+            self.notif_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3B82F6; color: white; font-weight: bold; padding: 8px 15px;
+                    border-radius: 6px; border: none;
+                }
+                QPushButton:hover { background-color: #2563EB; }
+            """)
 
-        self.stack.addWidget(self._wrap_page(self.dashboard))
-        self.stack.addWidget(self._wrap_page(self.dresses))
-        self.stack.addWidget(self._wrap_page(self.customers))
-        self.stack.addWidget(self._wrap_page(self.bookings))
-        self.stack.addWidget(self._wrap_page(self.registrars))
-        self.stack.addWidget(self._wrap_page(self.rentals))
-        self.stack.addWidget(self._wrap_page(self.reports))
-
-    def _wrap_page(self, page_widget):
-        area = QScrollArea()
-        area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.Shape.NoFrame)
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        area.setWidget(page_widget)
-        return area
-
-    def _switch_page(self, index):
-        self.stack.setCurrentIndex(index)
-        
-        # Update sidebar button state to match current page
-        if 0 <= index < len(self.nav_buttons):
-            self.nav_buttons[index].setChecked(True)
-            
-        self._animate_page_change()
-        # Refresh data when switching
-        if index == 0: self.dashboard.refresh()
-        elif index == 1: self.dresses.load_data()
-        elif index == 2: self.customers.load_data()
-        elif index == 3: self.bookings.load_data()
-        elif index == 4: self.registrars.load_data()
-        elif index == 5: self.rentals.load_data()
-        elif index == 6: self.reports.load_data()
-
-    def _animate_page_change(self):
-        page = self.stack.currentWidget()
-        if not page:
-            return
-        effect = page.graphicsEffect()
-        if not isinstance(effect, QGraphicsOpacityEffect):
-            effect = QGraphicsOpacityEffect(page)
-            page.setGraphicsEffect(effect)
-        effect.setOpacity(0.0)
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(220)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        self._page_fade_anim = anim
-
-    def _setup_clock(self):
-        def update():
-            now = datetime.now()
-            days_ar = ['الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد']
-            day = days_ar[now.weekday()]
-            self.clock_lbl.setText(f"{day}\n{now.strftime('%Y-%m-%d  %H:%M:%S')}")
-        update()
-        timer = QTimer(self)
-        timer.timeout.connect(update)
-        timer.start(1000)
+    def _show_notifications(self):
+        dlg = NotificationsDialog(self, self.db)
+        dlg.exec()
+        self._update_notifications()
 
     def closeEvent(self, event):
         try:

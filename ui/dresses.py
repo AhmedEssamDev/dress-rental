@@ -6,9 +6,63 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPixmap
 from styles import STATUS_AR, STATUS_COLOR, style_dialog_buttons, apply_button_style
 from image_utils import resolve_image_path
-from ui.image_viewer import ImageViewerDialog
-from ui.feedback import after_save, notify_success, focus_table_row
-from ui.admin_auth import AdminAuthDialog
+from PyQt6.QtWidgets import QScrollArea
+
+def notify_success(parent, message):
+    QMessageBox.information(parent, "نجاح", message)
+
+def focus_table_row(table, row):
+    if 0 <= row < table.rowCount():
+        table.selectRow(row)
+        table.scrollToItem(table.item(row, 0))
+
+def after_save(parent, table, row, message):
+    notify_success(parent, message)
+    focus_table_row(table, row)
+
+class ImageViewerDialog(QDialog):
+    def __init__(self, parent, image_path, title="عرض الصورة"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(500, 500)
+        lay = QVBoxLayout(self)
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = QPixmap(image_path)
+        if not pix.isNull():
+            lbl.setPixmap(pix.scaled(800, 800, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            lbl.setText("تعذر تحميل الصورة")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(lbl)
+        lay.addWidget(scroll)
+
+class AdminAuthDialog(QDialog):
+    def __init__(self, parent, db):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("صلاحيات المدير")
+        self.setFixedSize(300, 150)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        lay = QVBoxLayout(self)
+        
+        lay.addWidget(QLabel("يرجى إدخال كلمة المرور لتأكيد الإجراء:"))
+        self.pw_input = QLineEdit()
+        self.pw_input.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(self.pw_input)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._check_pw)
+        btns.rejected.connect(self.reject)
+        style_dialog_buttons(btns)
+        lay.addWidget(btns)
+        
+    def _check_pw(self):
+        if self.db.verify_admin_password(self.pw_input.text()):
+            self.accept()
+        else:
+            QMessageBox.warning(self, "خطأ", "كلمة المرور غير صحيحة")
 
 
 class DressDialog(QDialog):
@@ -84,21 +138,15 @@ class DressDialog(QDialog):
 
         self.code = QLineEdit(); self.code.setPlaceholderText("مثال: D001")
         self.name = QLineEdit(); self.name.setPlaceholderText("اسم الفستان")
-        self.size = QComboBox()
-        self.size.addItems(["XS", "S", "M", "L", "XL", "XXL", "XXXL", "مقاس خاص"])
         self.color = QLineEdit(); self.color.setPlaceholderText("اللون")
         self.category = QComboBox()
-        self.category.addItems(["فساتين سهرة", "فساتين زفاف", "فساتين خطوبة",
+        self.category.addItems(["فساتين سهرة", "فساتين سواريه", "فساتين زفاف", "فساتين خطوبة",
                                  "فساتين أفراح", "فساتين كوكتيل", "أخرى"])
         
         price_lay = QHBoxLayout()
         self.rental_price = QDoubleSpinBox()
         self.rental_price.setRange(0, 999999); self.rental_price.setSuffix(" ج"); self.rental_price.setDecimals(0)
-        self.deposit = QDoubleSpinBox()
-        self.deposit.setRange(0, 999999); self.deposit.setSuffix(" ج"); self.deposit.setDecimals(0)
         price_lay.addWidget(self.rental_price)
-        price_lay.addWidget(QLabel("التأمين:"))
-        price_lay.addWidget(self.deposit)
 
         self.description = QTextEdit()
         self.description.setMaximumHeight(70)
@@ -112,11 +160,7 @@ class DressDialog(QDialog):
         form.addRow(_lbl("الكود *:"), self.code)
         form.addRow(_lbl("الاسم *:"), self.name)
         
-        size_color = QHBoxLayout()
-        size_color.addWidget(self.size, stretch=1)
-        size_color.addWidget(_lbl("اللون:"), alignment=Qt.AlignmentFlag.AlignRight)
-        size_color.addWidget(self.color, stretch=1)
-        form.addRow(_lbl("المقاس:"), size_color)
+        form.addRow(_lbl("اللون:"), self.color)
         
         form.addRow(_lbl("التصنيف:"), self.category)
         form.addRow(_lbl("سعر الإيجار *:"), price_lay)
@@ -174,13 +218,10 @@ class DressDialog(QDialog):
     def _fill(self, d):
         self.code.setText(d['code'])
         self.name.setText(d['name'])
-        idx = self.size.findText(d['size'] or '')
-        if idx >= 0: self.size.setCurrentIndex(idx)
         self.color.setText(d['color'] or '')
         idx = self.category.findText(d['category'] or '')
         if idx >= 0: self.category.setCurrentIndex(idx)
         self.rental_price.setValue(d['rental_price'])
-        self.deposit.setValue(d['deposit'] or 0)
         self.description.setPlainText(d['description'] or '')
         if d['image_path']:
             full = resolve_image_path(d['image_path'])
@@ -200,11 +241,11 @@ class DressDialog(QDialog):
         return {
             'code': self.code.text().strip(),
             'name': self.name.text().strip(),
-            'size': self.size.currentText(),
+            'size': '',
             'color': self.color.text().strip(),
             'category': self.category.currentText(),
             'rental_price': self.rental_price.value(),
-            'deposit': self.deposit.value(),
+            'deposit': 0,
             'description': self.description.toPlainText().strip(),
         }
 
