@@ -73,7 +73,7 @@ class SimpleInvoiceDialog(QDialog):
         <body>
             {img_tag}
             <div class="header">
-                <h2>نظام تأجير الفساتين</h2>
+                <h2>عماد جاد فاشون</h2>
                 <p>إيصال تأجير فستان</p>
                 <p>التاريخ: {date.today().strftime('%Y-%m-%d')}</p>
             </div>
@@ -83,13 +83,18 @@ class SimpleInvoiceDialog(QDialog):
                 <tr><td style="text-align: right;">{r.get('dress_name', '')} ({r.get('dress_code', '')})</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الفستان</td></tr>
                 <tr><td style="text-align: right;">{r.get('rental_date', '')}</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الاستلام</td></tr>
                 <tr><td style="text-align: right;">{r.get('return_date', '')}</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الإرجاع</td></tr>
-                <tr><td style="text-align: right;">{r.get('total_amount', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الإجمالي</td></tr>
+                <tr><td style="text-align: right;">{r.get('rental_price', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">قيمة الإيجار</td></tr>
+                <tr><td style="text-align: right;">{r.get('deposit', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">التأمين</td></tr>
+                <tr><td style="text-align: right; font-weight: bold;">{r.get('total_amount', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الإجمالي</td></tr>
                 <tr><td style="text-align: right;">{r.get('paid_amount', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">المدفوع</td></tr>
                 <tr><td style="text-align: right;">{r.get('remaining_amount', 0)} جنيه</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">المتبقي</td></tr>
                 <tr><td style="text-align: right;">{r.get('registrar_name', 'غير محدد')}</td><td class="bold" style="width: 15px; text-align: center;">:</td><td class="bold">الكاشير</td></tr>
             </table>
             <div class="footer">
-                شكراً لتعاملكم معنا!<br>يُرجى الالتزام بموعد الإرجاع.
+                شكراً لتعاملكم معنا!<br>يُرجى الالتزام بموعد الإرجاع.<br><br>
+                <b>للتواصل:</b><br>
+                01096078609<br>
+                0552475393
             </div>
         </body>
         </html>
@@ -142,6 +147,11 @@ class SimpleRentalDialog(QDialog):
         self.return_date.setCalendarPopup(True)
         self.return_date.setDisplayFormat("dd/MM/yyyy")
         
+        self.insurance = QDoubleSpinBox()
+        self.insurance.setMaximum(100000)
+        self.insurance.setDecimals(2)
+        self.insurance.setValue(0.0)
+
         self.paid_amount = QDoubleSpinBox()
         self.paid_amount.setMaximum(100000)
         self.paid_amount.setDecimals(2)
@@ -157,6 +167,7 @@ class SimpleRentalDialog(QDialog):
         form.addRow("رقم الهاتف:", self.cust_phone)
         form.addRow("تاريخ الاستلام:", self.rent_date)
         form.addRow("موعد الإرجاع:", self.return_date)
+        form.addRow("التأمين (جنيه):", self.insurance)
         form.addRow("المبلغ المدفوع (جنيه):", self.paid_amount)
         form.addRow("الموظف (الكاشير):", self.registrar_combo)
         
@@ -191,7 +202,9 @@ class SimpleRentalDialog(QDialog):
         )
         
         paid = self.paid_amount.value()
-        total = float(self.dress.get('rental_price', 0) or 0)
+        insurance_val = self.insurance.value()
+        rental_val = float(self.dress.get('rental_price', 0) or 0)
+        total = rental_val + insurance_val
         remaining = max(0, total - paid)
         
         reg_id = self.registrar_combo.currentData()
@@ -214,7 +227,7 @@ class SimpleRentalDialog(QDialog):
             customer_id=cid,
             rental_date=self.rent_date.date().toString("yyyy-MM-dd"),
             expected_return_date=self.return_date.date().toString("yyyy-MM-dd"),
-            rental_price=total, deposit=0, discount=0, total_amount=total, paid_amount=paid,
+            rental_price=rental_val, deposit=insurance_val, discount=0, total_amount=total, paid_amount=paid,
             registered_by_id=reg_id
         )
         
@@ -228,6 +241,8 @@ class SimpleRentalDialog(QDialog):
             'dress_size': self.dress['size'],
             'rental_date': self.rent_date.date().toString("yyyy-MM-dd"),
             'return_date': self.return_date.date().toString("yyyy-MM-dd"),
+            'rental_price': rental_val,
+            'deposit': insurance_val,
             'total_amount': total,
             'paid_amount': paid,
             'remaining_amount': remaining,
@@ -259,7 +274,6 @@ class MonthlyRentalChartWidget(QWidget):
     def __init__(self, month_counts: dict):
         super().__init__()
         self.month_counts = month_counts
-        self.setFixedHeight(160)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -275,11 +289,11 @@ class MonthlyRentalChartWidget(QWidget):
         # عنوان الرسم البياني
         title_font = painter.font()
         title_font.setBold(True)
-        title_font.setPointSize(12)
+        title_font.setPointSize(14)
         painter.setFont(title_font)
         painter.setPen(QColor("#1E293B"))
         total = sum(self.month_counts.values())
-        painter.drawText(QRect(0, 10, w, 30), Qt.AlignmentFlag.AlignCenter, f"({total}) 📊 عدد التأجيرات لكل شهر")
+        painter.drawText(QRect(0, 20, w, 30), Qt.AlignmentFlag.AlignCenter, f"({total}) 📊 إحصائيات التأجير الشهرية")
         
         # إعداد البيانات
         months = sorted(self.month_counts.keys())
@@ -287,29 +301,26 @@ class MonthlyRentalChartWidget(QWidget):
         max_count = max(counts) if counts else 0
         
         if not months or max_count == 0:
-            # لا توجد بيانات
             no_data_font = painter.font()
             no_data_font.setPointSize(11)
-            no_data_font.setBold(False)
             painter.setFont(no_data_font)
             painter.setPen(QColor("#94A3B8"))
-            painter.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "لا توجد تأجيرات بعد")
+            painter.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "لا توجد بيانات")
             painter.end()
             return
         
         # حدود الرسم
-        top_margin = 40
-        bottom_margin = 40
+        top_margin = 80
+        bottom_margin = 60
         side_margin = 40
         chart_h = h - top_margin - bottom_margin
         chart_w = w - 2 * side_margin
         
         # حساب مواقع النقاط
         n = len(months)
-        gap = 12
-        point_spacing = min(60, max(30, (chart_w - (n - 1) * gap) // n if n > 0 else 0))
+        point_spacing = min(80, max(40, chart_w // n if n > 0 else 0))
         total_chart_width = n * point_spacing
-        start_x = side_margin + (chart_w - total_chart_width) // 2
+        start_x = side_margin + (chart_w - total_chart_width) // 2 + (point_spacing // 2)
         
         base_y = h - bottom_margin
         
@@ -318,74 +329,194 @@ class MonthlyRentalChartWidget(QWidget):
             cnt = self.month_counts[month]
             height_ratio = cnt / max_count if max_count > 0 else 0
             point_h = int(chart_h * height_ratio)
-            x = start_x + i * point_spacing + (point_spacing // 2)
+            x = start_x + i * point_spacing
             y = base_y - point_h
-            points.append(QPointF(x, y))
+            points.append((x, y, cnt, month))
             
-        # رسم المنطقة المظللة تحت الخط
+        # رسم الخط المتصل والظل تحته
         if len(points) > 0:
             path = QPainterPath()
-            path.moveTo(points[0].x(), base_y)
+            path.moveTo(points[0][0], base_y)
             for pt in points:
-                path.lineTo(pt)
-            path.lineTo(points[-1].x(), base_y)
+                path.lineTo(pt[0], pt[1])
+            path.lineTo(points[-1][0], base_y)
             path.closeSubpath()
             
             grad = QLinearGradient(0, top_margin, 0, base_y)
             grad.setColorAt(0.0, QColor(59, 130, 246, 100)) # أزرق شفاف
-            grad.setColorAt(1.0, QColor(59, 130, 246, 10))  # شبه شفاف جدا
+            grad.setColorAt(1.0, QColor(59, 130, 246, 10))
             painter.setBrush(QBrush(grad))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPath(path)
             
-            # رسم الخط (السهم/المسار)
+            # رسم الخط الأساسي (السهم)
             line_path = QPainterPath()
-            line_path.moveTo(points[0])
+            line_path.moveTo(points[0][0], points[0][1])
             for pt in points[1:]:
-                line_path.lineTo(pt)
+                line_path.lineTo(pt[0], pt[1])
             
-            pen = QPen(QColor("#3B82F6"), 3)
+            pen = QPen(QColor("#3B82F6"), 2) # خط أزرق
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(line_path)
             
-            # رسم النقاط والتسميات
-            for i, pt in enumerate(points):
-                cnt = self.month_counts[months[i]]
-                
-                # رسم النقطة (دائرة صغيرة)
-                painter.setPen(QPen(QColor("#FFFFFF"), 2))
-                painter.setBrush(QBrush(QColor("#2563EB")))
-                painter.drawEllipse(pt, 5, 5)
-                
-                # اسم الشهر تحت الرسم
-                month = months[i]
-                month_num = month[5:7] if len(month) >= 7 else month[5:]
-                month_name = self.MONTH_NAMES.get(month_num, month_num)
+        # رسم الدوائر والنصوص فوق النقاط
+        for x, y, cnt, month in points:
+            painter.setPen(QPen(QColor("#1D4ED8"), 2))
+            painter.setBrush(QBrush(QColor("#FFFFFF")))
+            painter.drawEllipse(QPointF(x, y), 3, 3)
+            
+            if cnt > 0:
                 label_font = painter.font()
+                label_font.setBold(True)
+                label_font.setPointSize(9)
+                painter.setFont(label_font)
+                painter.setPen(QColor("#1E293B"))
+                painter.drawText(QRect(int(x - 20), int(y - 25), 40, 20), Qt.AlignmentFlag.AlignCenter, str(cnt))
+            
+            # اسم الشهر والسنة
+            month_num = month[5:7] if len(month) >= 7 else month[5:]
+            month_name = self.MONTH_NAMES.get(month_num, month_num)
+            label_font.setBold(False)
+            label_font.setPointSize(8)
+            painter.setFont(label_font)
+            painter.setPen(QColor("#64748B"))
+            painter.drawText(QRect(int(x) - 30, base_y + 10, 60, 18), Qt.AlignmentFlag.AlignCenter, month_name)
+            year = month[:4]
+            painter.drawText(QRect(int(x) - 30, base_y + 25, 60, 16), Qt.AlignmentFlag.AlignCenter, year)
+        
+        painter.setPen(QPen(QColor("#CBD5E1"), 2))
+        painter.drawLine(side_margin, base_y, w - side_margin, base_y)
+        painter.end()
+
+
+class DailyRentalChartWidget(QWidget):
+    """رسم بياني يوضح عدد التأجيرات اليومية (آخر 30 يوم)."""
+    
+    def __init__(self, daily_counts: dict):
+        super().__init__()
+        self.daily_counts = daily_counts
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        h = self.height()
+        
+        # خلفية مع إطار
+        painter.setBrush(QBrush(QColor("#FFFFFF")))
+        painter.setPen(QPen(QColor("#E2E8F0"), 1))
+        painter.drawRoundedRect(1, 1, w - 2, h - 2, 12, 12)
+        
+        # عنوان الرسم البياني
+        title_font = painter.font()
+        title_font.setBold(True)
+        title_font.setPointSize(14)
+        painter.setFont(title_font)
+        painter.setPen(QColor("#1E293B"))
+        total = sum(self.daily_counts.values())
+        painter.drawText(QRect(0, 20, w, 30), Qt.AlignmentFlag.AlignCenter, f"({total}) 📊 إحصائيات التأجير اليومية")
+        
+        # إعداد البيانات
+        days = sorted(self.daily_counts.keys())
+        counts = [self.daily_counts[d] for d in days]
+        max_count = max(counts) if counts else 0
+        
+        if not days or max_count == 0:
+            no_data_font = painter.font()
+            no_data_font.setPointSize(11)
+            painter.setFont(no_data_font)
+            painter.setPen(QColor("#94A3B8"))
+            painter.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "لا توجد بيانات")
+            painter.end()
+            return
+        
+        # حدود الرسم
+        top_margin = 80
+        bottom_margin = 60
+        side_margin = 40
+        chart_h = h - top_margin - bottom_margin
+        chart_w = w - 2 * side_margin
+        
+        n = len(days)
+        point_spacing = min(80, max(20, chart_w // n if n > 0 else 0))
+        total_chart_width = (n - 1) * point_spacing
+        start_x = side_margin + (chart_w - total_chart_width) // 2
+        
+        base_y = h - bottom_margin
+        
+        points = []
+        for i, day in enumerate(days):
+            cnt = self.daily_counts[day]
+            height_ratio = cnt / max_count if max_count > 0 else 0
+            point_h = int(chart_h * height_ratio)
+            x = start_x + i * point_spacing
+            y = base_y - point_h
+            points.append((x, y, cnt, day))
+            
+        if len(points) > 0:
+            path = QPainterPath()
+            path.moveTo(points[0][0], base_y)
+            for pt in points:
+                path.lineTo(pt[0], pt[1])
+            path.lineTo(points[-1][0], base_y)
+            path.closeSubpath()
+            
+            grad = QLinearGradient(0, top_margin, 0, base_y)
+            grad.setColorAt(0.0, QColor(16, 185, 129, 100))
+            grad.setColorAt(1.0, QColor(16, 185, 129, 10))
+            painter.setBrush(QBrush(grad))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawPath(path)
+            
+            line_path = QPainterPath()
+            line_path.moveTo(points[0][0], points[0][1])
+            for pt in points[1:]:
+                line_path.lineTo(pt[0], pt[1])
+            
+            pen = QPen(QColor("#10B981"), 2)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(line_path)
+            
+        for i, (x, y, cnt, day) in enumerate(points):
+            painter.setPen(QPen(QColor("#047857"), 2))
+            painter.setBrush(QBrush(QColor("#FFFFFF")))
+            painter.drawEllipse(QPointF(x, y), 3, 3)
+            
+            if cnt > 0:
+                label_font = painter.font()
+                label_font.setBold(True)
+                label_font.setPointSize(9)
+                painter.setFont(label_font)
+                painter.setPen(QColor("#1E293B"))
+                painter.drawText(QRect(int(x - 20), int(y - 25), 40, 20), Qt.AlignmentFlag.AlignCenter, str(cnt))
+            
+            # Show date labels
+            skip = max(1, n // 10)
+            if i % skip == 0 or i == n - 1 or cnt > 0:
                 label_font.setBold(False)
                 label_font.setPointSize(8)
                 painter.setFont(label_font)
                 painter.setPen(QColor("#64748B"))
-                painter.drawText(QRect(int(pt.x()) - 30, base_y + 5, 60, 18), Qt.AlignmentFlag.AlignCenter, month_name)
-                # السنة
-                year = month[:4]
-                painter.drawText(QRect(int(pt.x()) - 30, base_y + 20, 60, 16), Qt.AlignmentFlag.AlignCenter, year)
+                day_part = day[5:] # MM-DD
+                painter.drawText(QRect(int(x) - 30, base_y + 10, 60, 18), Qt.AlignmentFlag.AlignCenter, day_part)
         
-        # خط القاعدة
         painter.setPen(QPen(QColor("#CBD5E1"), 2))
         painter.drawLine(side_margin, base_y, w - side_margin, base_y)
-        
         painter.end()
 
 
 class DressDetailsWidget(QWidget):
-    def __init__(self, db, back_callback):
+    def __init__(self, db, back_callback, view_stats_callback):
         super().__init__()
         self.db = db
         self.back_callback = back_callback
+        self.view_stats_callback = view_stats_callback
         self.dress = None
         self._build_ui()
 
@@ -404,6 +535,7 @@ class DressDetailsWidget(QWidget):
         
         # Content
         content_lay = QHBoxLayout()
+        content_lay.setSpacing(20)
         
         # Right: Image
         self.img_lbl = QLabel()
@@ -412,46 +544,53 @@ class DressDetailsWidget(QWidget):
         self.img_lbl.setStyleSheet("background:#FFF; border:2px dashed #CBD5E1; border-radius:10px;")
         content_lay.addWidget(self.img_lbl)
         
-        # Left: Details & Chart & Buttons
-        left_lay = QVBoxLayout()
+        # Middle: Details, Table & Buttons
+        middle_lay = QVBoxLayout()
         self.title_lbl = QLabel()
         self.title_lbl.setStyleSheet("font-size: 24px; font-weight: bold; color: #1E293B;")
-        left_lay.addWidget(self.title_lbl)
+        middle_lay.addWidget(self.title_lbl)
         
         self.info_lbl = QLabel()
         self.info_lbl.setStyleSheet("font-size: 16px; color: #475569;")
-        left_lay.addWidget(self.info_lbl)
+        middle_lay.addWidget(self.info_lbl)
         
-        left_lay.addSpacing(20)
+        middle_lay.addSpacing(10)
         
-        # Chart placeholder
-        self.chart_container = QVBoxLayout()
-        left_lay.addLayout(self.chart_container)
-        
-        left_lay.addStretch()
+        # Rentals Table
+        from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.rentals_table = QTableWidget(0, 4)
+        self.rentals_table.setHorizontalHeaderLabels(["العميل", "الاستلام", "الإرجاع", "إجراء"])
+        self.rentals_table.horizontalHeader().setStretchLastSection(False)
+        self.rentals_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.rentals_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.rentals_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.rentals_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.rentals_table.setColumnWidth(3, 240)
+        self.rentals_table.setAlternatingRowColors(True)
+        self.rentals_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.rentals_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.rentals_table.verticalHeader().setVisible(False)
+        self.rentals_table.verticalHeader().setDefaultSectionSize(65)
+        self.rentals_table.setMinimumHeight(250)
+        middle_lay.addWidget(self.rentals_table)
+
+        middle_lay.addSpacing(10)
         
         # حالة الحجز
         self.status_lbl = QLabel()
         self.status_lbl.setStyleSheet("font-size: 18px; font-weight: bold; padding: 8px 16px; border-radius: 8px;")
-        left_lay.addWidget(self.status_lbl)
+        middle_lay.addWidget(self.status_lbl)
         
-        left_lay.addSpacing(10)
+        middle_lay.addSpacing(10)
         
         # Buttons
         btns = QHBoxLayout()
-        self.action_btn = QPushButton("✅  تأجير / حجز")
+        self.action_btn = QPushButton("➕ تأجير / حجز جديد")
         apply_button_style(self.action_btn, "primary")
         self.action_btn.setFixedHeight(50)
         self.action_btn.clicked.connect(self._on_main_action)
-        
-        self.print_btn = QPushButton("🖨️ طباعة إيصال")
-        apply_button_style(self.print_btn, "secondary")
-        self.print_btn.setFixedHeight(50)
-        self.print_btn.clicked.connect(self._on_print)
-        
-        btns.addWidget(self.action_btn, stretch=2)
-        btns.addWidget(self.print_btn, stretch=1)
-        left_lay.addLayout(btns)
+        btns.addWidget(self.action_btn, stretch=1)
+        middle_lay.addLayout(btns)
         
         # أزرار التعديل والحذف
         mgmt_btns = QHBoxLayout()
@@ -467,9 +606,18 @@ class DressDetailsWidget(QWidget):
         
         mgmt_btns.addWidget(self.edit_btn)
         mgmt_btns.addWidget(self.delete_btn)
-        left_lay.addLayout(mgmt_btns)
+        middle_lay.addLayout(mgmt_btns)
         
-        content_lay.addLayout(left_lay, stretch=1)
+        middle_lay.addSpacing(10)
+        self.stats_btn = QPushButton("📊 عرض إحصائيات التأجير")
+        self.stats_btn.setStyleSheet("background-color: #8B5CF6; color: white; border-radius: 8px; font-weight: bold;")
+        self.stats_btn.setFixedHeight(45)
+        self.stats_btn.clicked.connect(lambda: self.view_stats_callback(self.dress['id']) if self.dress else None)
+        middle_lay.addWidget(self.stats_btn)
+        
+        middle_lay.addStretch()
+        content_lay.addLayout(middle_lay, stretch=2)
+
         main_lay.addLayout(content_lay)
 
     def set_dress(self, dress_id):
@@ -483,36 +631,68 @@ class DressDetailsWidget(QWidget):
         info += f"التصنيف: {self.dress.get('category') or '—'}\n"
         price = self.dress.get('rental_price', 0) or 0
         info += f"السعر: {price} جنيه\n"
-        
-        # حالة الحجز وتحديث الأزرار
-        status = self.dress.get('status', 'available')
-        
-        if status == 'rented':
-            active_rental = self.db.conn.execute(
-                "SELECT r.*, c.name as customer_name FROM rentals r JOIN customers c ON r.customer_id=c.id "
-                "WHERE r.dress_id=? AND r.status='active' ORDER BY r.rental_date DESC LIMIT 1",
-                (self.dress['id'],)
-            ).fetchone()
-            if active_rental:
-                info += f"\n-- تفاصيل التأجير النشط --\n"
-                info += f"العميل: {active_rental['customer_name']}\n"
-                info += f"الاستلام: {active_rental['rental_date']}\n"
-                info += f"الإرجاع: {active_rental['expected_return_date']}\n"
-                info += f"الإجمالي: {active_rental['total_amount'] or 0} ج | المدفوع: {active_rental['paid_amount'] or 0} ج"
-                
         self.info_lbl.setText(info)
-        if status == 'rented':
-            self.status_lbl.setText("📛 محجوز حالياً")
+        
+        # Load active rentals
+        active_rentals = self.db.conn.execute(
+            "SELECT r.*, c.name as customer_name, c.phone as customer_phone, reg.name as registrar_name "
+            "FROM rentals r JOIN customers c ON r.customer_id=c.id "
+            "LEFT JOIN registrars reg ON r.registered_by_id=reg.id "
+            "WHERE r.dress_id=? AND r.status='active' ORDER BY r.rental_date ASC",
+            (self.dress['id'],)
+        ).fetchall()
+        
+        from PyQt6.QtWidgets import QTableWidgetItem, QWidget, QHBoxLayout
+        self.rentals_table.setRowCount(0)
+        
+        if active_rentals:
+            self.status_lbl.setText(f"📛 محجوز (يوجد {len(active_rentals)} عملية نشطة)")
             self.status_lbl.setStyleSheet("font-size: 18px; font-weight: bold; padding: 8px 16px; border-radius: 8px; background: #FEE2E2; color: #DC2626;")
-            self.action_btn.setText("↩️ إرجاع الفستان")
-            apply_button_style(self.action_btn, "warning")
-            self.print_btn.setEnabled(True)
+            
+            for i, r in enumerate(active_rentals):
+                self.rentals_table.insertRow(i)
+                
+                c_name = QTableWidgetItem(r['customer_name'])
+                c_name.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.rentals_table.setItem(i, 0, c_name)
+                
+                r_date = QTableWidgetItem(r['rental_date'])
+                r_date.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.rentals_table.setItem(i, 1, r_date)
+                
+                ret_date = QTableWidgetItem(r['expected_return_date'])
+                ret_date.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.rentals_table.setItem(i, 2, ret_date)
+                
+                # Actions widget
+                w = QWidget()
+                w_lay = QHBoxLayout(w)
+                w_lay.setContentsMargins(10, 10, 10, 10)
+                w_lay.setSpacing(12)
+                
+                from PyQt6.QtWidgets import QSizePolicy
+                ret_btn = QPushButton("↩ إرجاع")
+                ret_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                ret_btn.setStyleSheet("background-color: #F59E0B; color: white; border-radius: 6px; font-weight: bold; font-size: 14px; padding: 4px 10px;")
+                ret_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                ret_btn.clicked.connect(lambda checked, rid=r['id']: self._on_return_rental(rid))
+                
+                prt_btn = QPushButton("🖨 طباعة")
+                prt_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                prt_btn.setStyleSheet("background-color: #3B82F6; color: white; border-radius: 6px; font-weight: bold; font-size: 14px; padding: 4px 10px;")
+                prt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Convert sqlite3.Row to dict for printing
+                r_dict = dict(r)
+                prt_btn.clicked.connect(lambda checked, data=r_dict: self._print_specific_rental(data))
+                
+                w_lay.addWidget(prt_btn)
+                w_lay.addWidget(ret_btn)
+                
+                self.rentals_table.setCellWidget(i, 3, w)
+                self.rentals_table.setRowHeight(i, 65)
         else:
             self.status_lbl.setText("✅ متاح للحجز")
             self.status_lbl.setStyleSheet("font-size: 18px; font-weight: bold; padding: 8px 16px; border-radius: 8px; background: #D1FAE5; color: #059669;")
-            self.action_btn.setText("✅ تأجير / حجز")
-            apply_button_style(self.action_btn, "primary")
-            self.print_btn.setEnabled(False)
         
         full_img = resolve_image_path(self.dress['image_path'])
         if full_img:
@@ -522,75 +702,40 @@ class DressDetailsWidget(QWidget):
             self.img_lbl.setText("لا توجد صورة")
             self.img_lbl.setPixmap(QPixmap())
             
-        # Draw Chart
-        for i in reversed(range(self.chart_container.count())): 
-            w = self.chart_container.itemAt(i).widget()
-            if w: w.deleteLater()
-            
-        # Get count of rentals
-        rows = self.db.conn.execute(
-            "SELECT strftime('%Y-%m', rental_date) as month, COUNT(*) as cnt FROM rentals WHERE dress_id=? GROUP BY month ORDER BY month"
-            , (dress_id,)
-        ).fetchall()
-        month_counts = {row['month']: row['cnt'] for row in rows}
-        chart = MonthlyRentalChartWidget(month_counts)
-        self.chart_container.addWidget(chart)
+        # تم نقل الرسم البياني إلى صفحة DressStatisticsWidget
 
     def _on_main_action(self):
-        status = self.dress.get('status', 'available')
-        
-        if status == 'rented':
-            # ارجاع الفستان
-            reply = QMessageBox.question(self, "تأكيد الإرجاع", "هل أنت متأكد من استلام الفستان وإرجاعه للمخزون؟",
-                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                rental = self.db.conn.execute(
-                    "SELECT id FROM rentals WHERE dress_id=? AND status='active' ORDER BY rental_date DESC LIMIT 1", 
-                    (self.dress['id'],)
-                ).fetchone()
-                if rental:
-                    self.db.return_dress(rental['id'], QDate.currentDate().toString("yyyy-MM-dd"))
-                    QMessageBox.information(self, "نجاح", "تم إرجاع الفستان بنجاح وأصبح متاحاً.")
-                    self.set_dress(self.dress['id'])
-                else:
-                    # In case of missing rental record, just force status change
-                    self.db.update_dress_status(self.dress['id'], 'available')
-                    self.set_dress(self.dress['id'])
-                    
-        else:
-            # تأجير الفستان
-            dlg = SimpleRentalDialog(self, self.db, self.dress)
-            if dlg.exec():
-                inv = SimpleInvoiceDialog(self, dlg.rental_data)
-                inv.exec()
-                self.back_callback()  # return to grid
+        # تأجير الفستان بغض النظر عن حالته
+        dlg = SimpleRentalDialog(self, self.db, self.dress)
+        if dlg.exec():
+            inv = SimpleInvoiceDialog(self, dlg.rental_data)
+            inv.exec()
+            self.set_dress(self.dress['id'])
 
-    def _on_print(self):
-        # Fetch most recent rental for this dress
-        rental = self.db.conn.execute(
-            "SELECT r.*, c.name as customer_name, c.phone as customer_phone, reg.name as registrar_name "
-            "FROM rentals r JOIN customers c ON r.customer_id = c.id "
-            "LEFT JOIN registrars reg ON r.registered_by_id = reg.id "
-            "WHERE r.dress_id=? ORDER BY r.rental_date DESC LIMIT 1",
-            (self.dress['id'],)
-        ).fetchone()
-        if not rental:
-            QMessageBox.information(self, "تنبيه", "لا توجد سجلات تأجير سابقة لهذا الفستان لطباعتها.")
-            return
+    def _on_return_rental(self, rental_id):
+        reply = QMessageBox.question(self, "تأكيد الإرجاع", "هل أنت متأكد من استلام الفستان من هذا العميل وإرجاعه؟",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db.return_dress(rental_id, QDate.currentDate().toString("yyyy-MM-dd"))
+            QMessageBox.information(self, "نجاح", "تم إرجاع الفستان بنجاح.")
+            self.set_dress(self.dress['id'])
+
+    def _print_specific_rental(self, rental_dict):
         data = {
-            'id': rental['id'],
-            'customer_name': rental['customer_name'],
-            'customer_phone': rental['customer_phone'],
+            'id': rental_dict['id'],
+            'customer_name': rental_dict['customer_name'],
+            'customer_phone': rental_dict['customer_phone'],
             'dress_name': self.dress['name'],
             'dress_code': self.dress['code'],
             'dress_color': self.dress['color'],
             'dress_size': self.dress['size'],
-            'rental_date': rental['rental_date'],
-            'return_date': rental['expected_return_date'],
-            'total_amount': rental['total_amount'] or 0,
-            'paid_amount': rental['paid_amount'] or 0,
-            'remaining_amount': rental['remaining_amount'] or 0,
-            'registrar_name': rental['registrar_name'] or 'غير محدد'
+            'rental_date': rental_dict['rental_date'],
+            'return_date': rental_dict['expected_return_date'],
+            'total_amount': rental_dict['total_amount'] or 0,
+            'paid_amount': rental_dict['paid_amount'] or 0,
+            'remaining_amount': rental_dict['remaining_amount'] or 0,
+            'registrar_name': rental_dict['registrar_name'] or 'غير محدد',
+            'deposit': rental_dict['deposit'] or 0
         }
         inv = SimpleInvoiceDialog(self, data)
         inv.exec()
@@ -629,14 +774,85 @@ class DressDetailsWidget(QWidget):
                             self.back_callback()
                         else:
                             QMessageBox.warning(self, "خطأ", err_force or "فشل الحذف الإجباري.")
-                else:
                     QMessageBox.warning(self, "خطأ", err or "لا يمكن حذف الفستان.")
 
+class DressStatisticsWidget(QWidget):
+    def __init__(self, db, back_callback):
+        super().__init__()
+        self.db = db
+        self.back_callback = back_callback
+        self.dress = None
+        self._build_ui()
+
+    def _build_ui(self):
+        main_lay = QVBoxLayout(self)
+        main_lay.setContentsMargins(20, 20, 20, 20)
+        
+        # شريط العودة والعنوان
+        hdr = QHBoxLayout()
+        self.back_btn = QPushButton("◀ عودة للتفاصيل")
+        apply_button_style(self.back_btn, "secondary")
+        self.back_btn.setFixedHeight(45)
+        self.back_btn.clicked.connect(self.back_callback)
+        hdr.addWidget(self.back_btn)
+        
+        self.title_lbl = QLabel("إحصائيات الفستان")
+        self.title_lbl.setStyleSheet("font-size: 24px; font-weight: bold; color: #1E293B;")
+        self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hdr.addWidget(self.title_lbl, stretch=1)
+        
+        # spacer للموازنة
+        spacer = QWidget()
+        spacer.setFixedWidth(self.back_btn.width() if self.back_btn.width() > 0 else 150)
+        hdr.addWidget(spacer)
+        
+        main_lay.addLayout(hdr)
+        main_lay.addSpacing(20)
+        
+        self.chart_container = QVBoxLayout()
+        main_lay.addLayout(self.chart_container, stretch=1)
+
+    def set_dress(self, dress_id):
+        dress_row = self.db.get_dress(dress_id)
+        if not dress_row: return
+        self.dress = dict(dress_row)
+        self.title_lbl.setText(f"إحصائيات {self.dress['name']} (كود: {self.dress['code']})")
+        
+        for i in reversed(range(self.chart_container.count())): 
+            w = self.chart_container.itemAt(i).widget()
+            if w: w.deleteLater()
+            
+        # البيانات اليومية
+        daily_rows = self.db.conn.execute(
+            "SELECT strftime('%Y-%m-%d', rental_date) as day, COUNT(*) as cnt FROM rentals WHERE dress_id=? GROUP BY day ORDER BY day DESC LIMIT 60",
+            (dress_id,)
+        ).fetchall()
+        daily_counts = {row['day']: row['cnt'] for row in daily_rows}
+        
+        # البيانات الشهرية
+        monthly_rows = self.db.conn.execute(
+            "SELECT strftime('%Y-%m', rental_date) as month, COUNT(*) as cnt FROM rentals WHERE dress_id=? GROUP BY month ORDER BY month DESC LIMIT 12",
+            (dress_id,)
+        ).fetchall()
+        monthly_counts = {row['month']: row['cnt'] for row in monthly_rows}
+        
+        # تم إزالة بيانات الاختبار الوهمية
+        
+        # إنشاء وعرض الرسوم
+        daily_chart = DailyRentalChartWidget(daily_counts)
+        monthly_chart = MonthlyRentalChartWidget(monthly_counts)
+        
+        # جعل كل رسم يأخذ نفس المساحة
+        self.chart_container.addWidget(daily_chart, stretch=1)
+        self.chart_container.addSpacing(10)
+        self.chart_container.addWidget(monthly_chart, stretch=1)
+
 class CashierGridWidget(QWidget):
-    def __init__(self, db, select_callback):
+    def __init__(self, db, select_callback, back_to_dashboard_callback):
         super().__init__()
         self.db = db
         self.select_callback = select_callback
+        self.back_to_dashboard_callback = back_to_dashboard_callback
         self._build_ui()
         self.load_data()
 
@@ -646,11 +862,18 @@ class CashierGridWidget(QWidget):
         # Header actions
         actions_lay = QHBoxLayout()
         
+        # Back to Dashboard Button
+        self.back_btn = QPushButton("◀ عودة للرئيسية")
+        apply_button_style(self.back_btn, "secondary")
+        self.back_btn.setFixedHeight(45)
+        self.back_btn.clicked.connect(self.back_to_dashboard_callback)
+        actions_lay.addWidget(self.back_btn)
+        
         # Search
         self.search = QLineEdit()
         self.search.setPlaceholderText("🔍 بحث باسم الفستان أو الكود...")
         self.search.setStyleSheet("padding: 10px; font-size: 16px; border-radius: 8px; border: 1px solid #CBD5E1;")
-        self.search.textChanged.connect(self.load_data)
+        self.search.textChanged.connect(lambda text: self._reload_with_current_filter())
         actions_lay.addWidget(self.search, stretch=1)
         
         # Add Dress Button
@@ -668,6 +891,9 @@ class CashierGridWidget(QWidget):
         self.list_widget.setIconSize(QSize(150, 200))
         self.list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.list_widget.setSpacing(20)
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setGridSize(QSize(180, 260))
+        self.list_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.list_widget.setStyleSheet("""
             QListWidget { background: transparent; border: none; }
             QListWidget::item { background: #FFF; border-radius: 10px; padding: 10px; }
@@ -689,10 +915,18 @@ class CashierGridWidget(QWidget):
                     self.db.set_dress_image(result, dlg.get_pending_image())
                 self.load_data()
 
-    def load_data(self):
+    def load_data(self, status_filter=None):
+        self.current_status_filter = status_filter
+        self._reload_with_current_filter()
+
+    def _reload_with_current_filter(self):
         self.list_widget.clear()
         search = self.search.text().strip() or None
+        
         dresses = self.db.get_all_dresses(search=search)
+        
+        if hasattr(self, 'current_status_filter') and self.current_status_filter:
+            dresses = [d for d in dresses if d['status'] == self.current_status_filter]
         
         for d in dresses:
             item = QListWidgetItem()
@@ -726,9 +960,10 @@ class CashierGridWidget(QWidget):
 
 
 class CashierWidget(QWidget):
-    def __init__(self, db):
+    def __init__(self, db, back_to_dashboard_callback):
         super().__init__()
         self.db = db
+        self.back_to_dashboard_callback = back_to_dashboard_callback
         self._build_ui()
 
     def _build_ui(self):
@@ -738,16 +973,29 @@ class CashierWidget(QWidget):
         self.stack = QStackedWidget()
         lay.addWidget(self.stack)
         
-        self.grid_view = CashierGridWidget(self.db, self._show_details)
-        self.details_view = DressDetailsWidget(self.db, self._show_grid)
+        self.grid_view = CashierGridWidget(self.db, self._show_details, self.back_to_dashboard_callback)
+        self.details_view = DressDetailsWidget(self.db, self._show_grid, self._show_stats)
+        self.stats_view = DressStatisticsWidget(self.db, self._hide_stats)
         
         self.stack.addWidget(self.grid_view)
         self.stack.addWidget(self.details_view)
+        self.stack.addWidget(self.stats_view)
 
     def _show_details(self, dress_id):
         self.details_view.set_dress(dress_id)
         self.stack.setCurrentIndex(1)
 
+    def _show_stats(self, dress_id):
+        self.stats_view.set_dress(dress_id)
+        self.stack.setCurrentIndex(2)
+
+    def _hide_stats(self):
+        self.stack.setCurrentIndex(1)
+
     def _show_grid(self):
         self.grid_view.load_data()
         self.stack.setCurrentIndex(0)
+
+    def load_dresses(self, status_filter=None):
+        self.stack.setCurrentIndex(0)
+        self.grid_view.load_data(status_filter)

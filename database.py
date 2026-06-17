@@ -350,7 +350,7 @@ class Database:
         if search:
             q += " AND (d.name LIKE ? OR d.code LIKE ? OR d.color LIKE ?)"
             p += [f"%{search}%"] * 3
-        q += " ORDER BY d.created_at DESC"
+        q += " ORDER BY d.id ASC"
         if limit is not None:
             q += " LIMIT ? OFFSET ?"
             p.extend([limit, offset])
@@ -392,17 +392,14 @@ class Database:
         self.conn.commit()
 
     def delete_customer(self, cid):
-        rent_map, book_map = self._count_customer_links(cid)
-        linked_msg = self._format_link_message(rent_map, book_map)
-        if linked_msg:
-            return False, f"لا يمكن حذف العميل. {linked_msg}"
         try:
-            self.conn.execute("DELETE FROM customers WHERE id=?", (cid,))
-            self.conn.execute("UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id), 0) FROM customers) WHERE name = 'customers'")
+            # بدلاً من المسح نهائياً ومسح السجلات المرتبطة به، 
+            # سنقوم بإخفائه من واجهة العملاء (Soft Delete)
+            self.conn.execute("UPDATE customers SET is_archived = 1 WHERE id=?", (cid,))
             self.conn.commit()
             return True, None
-        except sqlite3.IntegrityError:
-            return False, "لا يمكن حذف العميل لأنه مرتبط بعمليات (تأجير/حجز) مسجلة."
+        except sqlite3.Error as e:
+            return False, f"حدث خطأ أثناء أرشفة العميل: {str(e)}"
 
     def archive_dress(self, did):
         dress = self.get_dress(did)
@@ -519,7 +516,12 @@ class Database:
                                  WHERE id=?""",
                               (actual_return_date, rental_id))
             self.conn.commit()
-            self.update_dress_status(rental['dress_id'], 'available')
+            
+            # Check if there are other active rentals for this dress
+            active_count = self.conn.execute("SELECT COUNT(*) as n FROM rentals WHERE dress_id=? AND status='active'", (rental['dress_id'],)).fetchone()['n']
+            if active_count == 0:
+                self.update_dress_status(rental['dress_id'], 'available')
+                
             if additional_payment > 0:
                 self.add_payment(rental_id, additional_payment, method, 'دفعة عند الإرجاع')
             # Ensure remaining is normalized after return.

@@ -5,6 +5,9 @@ from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont, QPixmap, QIcon
 
 from ui.cashier import CashierWidget
+from ui.dashboard import DashboardWidget
+from ui.customers import CustomersWidget
+from ui.revenues import RevenuesWidget
 import os
 
 class NotificationsDialog(QDialog):
@@ -145,8 +148,32 @@ class MainWindow(QMainWindow):
         self.stack.setStyleSheet("background-color: #F7F4F0;")
         main_lay.addWidget(self.stack)
 
-        self.cashier = CashierWidget(db=self.db)
-        self.stack.addWidget(self.cashier)
+        self.dashboard = DashboardWidget(self.db, self._navigate)
+        self.cashier = CashierWidget(self.db, self._show_dashboard)
+        self.customers = CustomersWidget(self.db, self._show_dashboard)
+        self.revenues = RevenuesWidget(self.db, self._show_dashboard)
+
+        self.stack.addWidget(self.dashboard) # 0
+        self.stack.addWidget(self.cashier)   # 1
+        self.stack.addWidget(self.customers) # 2
+        self.stack.addWidget(self.revenues)  # 3
+        
+        self._show_dashboard()
+
+    def _show_dashboard(self):
+        self.dashboard.load_data()
+        self.stack.setCurrentIndex(0)
+        
+    def _navigate(self, page, param=None):
+        if page == 'dresses':
+            self.cashier.load_dresses(status_filter=param)
+            self.stack.setCurrentIndex(1)
+        elif page == 'customers':
+            self.customers.load_data()
+            self.stack.setCurrentIndex(2)
+        elif page == 'revenues':
+            self.revenues.load_data()
+            self.stack.setCurrentIndex(3)
 
     def _update_notifications(self):
         notifs = self.db.get_notifications()
