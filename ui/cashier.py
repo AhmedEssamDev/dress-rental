@@ -117,6 +117,87 @@ class SimpleInvoiceDialog(QDialog):
         doc.setHtml(self._generate_html())
         doc.print(printer)
 
+class ReturnSettlementDialog(QDialog):
+    def __init__(self, parent, db, rental):
+        super().__init__(parent)
+        self.db = db
+        self.rental = rental
+        self.setWindowTitle("تسوية الإرجاع")
+        self.setMinimumWidth(400)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        
+        self.total_amount = float(rental['total_amount'] or 0)
+        self.deposit = float(rental['deposit'] or 0)
+        self.rental_price = float(rental['rental_price'] or 0)
+        self.paid = float(rental['paid_amount'] or 0)
+        
+        self.final_collection = 0
+        self.final_refund = 0
+        
+        self._build()
+
+    def _build(self):
+        lay = QVBoxLayout(self)
+        
+        from PyQt6.QtWidgets import QGroupBox, QRadioButton
+        info_group = QGroupBox("تفاصيل الحساب الحالية")
+        info_lay = QFormLayout(info_group)
+        info_lay.addRow("قيمة الإيجار:", QLabel(f"{self.rental_price} جنيه"))
+        info_lay.addRow("قيمة التأمين:", QLabel(f"{self.deposit} جنيه"))
+        info_lay.addRow("الإجمالي:", QLabel(f"{self.total_amount} جنيه"))
+        info_lay.addRow("المدفوع مقدماً:", QLabel(f"{self.paid} جنيه"))
+        lay.addWidget(info_group)
+        
+        condition_group = QGroupBox("حالة الفستان")
+        cond_lay = QVBoxLayout(condition_group)
+        self.radio_intact = QRadioButton("الفستان سليم (استرداد/إعفاء التأمين)")
+        self.radio_damaged = QRadioButton("الفستان تالف (مصادرة مبلغ التأمين بالكامل)")
+        self.radio_intact.setChecked(True)
+        self.radio_intact.toggled.connect(self._calculate)
+        cond_lay.addWidget(self.radio_intact)
+        cond_lay.addWidget(self.radio_damaged)
+        lay.addWidget(condition_group)
+        
+        self.result_lbl = QLabel()
+        self.result_lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background: #E0F2FE; border-radius: 5px;")
+        self.result_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.result_lbl)
+        
+        from PyQt6.QtWidgets import QDialogButtonBox
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("تأكيد الإرجاع والتسوية")
+        btns.button(QDialogButtonBox.StandardButton.Cancel).setText("إلغاء")
+        apply_button_style(btns.button(QDialogButtonBox.StandardButton.Ok), "primary")
+        lay.addWidget(btns)
+        
+        self._calculate()
+
+    def _calculate(self):
+        if self.radio_intact.isChecked():
+            final_total = self.rental_price
+        else:
+            final_total = self.total_amount
+            
+        diff = self.paid - final_total
+        if diff > 0:
+            self.final_refund = diff
+            self.final_collection = 0
+            self.result_lbl.setText(f"يجب رد مبلغ للعميل قدره: {diff} جنيه")
+            self.result_lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background: #FEF08A; color: #854D0E;")
+        elif diff < 0:
+            self.final_refund = 0
+            self.final_collection = abs(diff)
+            self.result_lbl.setText(f"المبلغ المتبقي المطلوب تحصيله: {abs(diff)} جنيه")
+            self.result_lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background: #FECACA; color: #991B1B;")
+        else:
+            self.final_refund = 0
+            self.final_collection = 0
+            self.result_lbl.setText("الحساب خالص. لا يوجد متبقي أو مسترد.")
+            self.result_lbl.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background: #D1FAE5; color: #065F46;")
+
+
 class SimpleRentalDialog(QDialog):
     def __init__(self, parent, db, dress):
         super().__init__(parent)
@@ -565,7 +646,7 @@ class DressDetailsWidget(QWidget):
         self.rentals_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.rentals_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.rentals_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.rentals_table.setColumnWidth(3, 240)
+        self.rentals_table.setColumnWidth(3, 330)
         self.rentals_table.setAlternatingRowColors(True)
         self.rentals_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.rentals_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -685,6 +766,13 @@ class DressDetailsWidget(QWidget):
                 r_dict = dict(r)
                 prt_btn.clicked.connect(lambda checked, data=r_dict: self._print_specific_rental(data))
                 
+                cancel_btn = QPushButton("❌ إلغاء")
+                cancel_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                cancel_btn.setStyleSheet("background-color: #EF4444; color: white; border-radius: 6px; font-weight: bold; font-size: 14px; padding: 4px 10px;")
+                cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                cancel_btn.clicked.connect(lambda checked, rid=r['id']: self._on_cancel_rental(rid))
+                
+                w_lay.addWidget(cancel_btn)
                 w_lay.addWidget(prt_btn)
                 w_lay.addWidget(ret_btn)
                 
@@ -713,11 +801,55 @@ class DressDetailsWidget(QWidget):
             self.set_dress(self.dress['id'])
 
     def _on_return_rental(self, rental_id):
-        reply = QMessageBox.question(self, "تأكيد الإرجاع", "هل أنت متأكد من استلام الفستان من هذا العميل وإرجاعه؟",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        rental = self.db.get_rental(rental_id)
+        if not rental: return
+        
+        dlg = ReturnSettlementDialog(self, self.db, rental)
+        if dlg.exec():
+            actual_date = QDate.currentDate().toString("yyyy-MM-dd")
+            
+            # If intact, waive the deposit
+            if dlg.radio_intact.isChecked() and rental['deposit'] > 0:
+                new_total = float(rental['rental_price'])
+                self.db.conn.execute("UPDATE rentals SET deposit=0, total_amount=?, remaining_amount=max(0, ?-paid_amount) WHERE id=?", 
+                                     (new_total, new_total, rental_id))
+                self.db.conn.commit()
+            
+            # Handle collection
+            if dlg.final_collection > 0:
+                self.db.return_dress(rental_id, actual_date, additional_payment=dlg.final_collection)
+            else:
+                self.db.return_dress(rental_id, actual_date)
+                
+            # Handle refund
+            if dlg.final_refund > 0:
+                self.db.add_refund(rental_id, dlg.final_refund, 'cash', 'استرداد مبلغ التأمين عند الإرجاع (الفستان سليم)')
+                
+            QMessageBox.information(self, "نجاح", "تم إرجاع الفستان وتسوية الحساب بنجاح.")
+            self.set_dress(self.dress['id'])
+
+    def _on_cancel_rental(self, rental_id):
+        reply = QMessageBox.question(
+            self, "إلغاء الحجز",
+            "هل أنت متأكد من إلغاء هذا الحجز؟ سيتم إرجاع أي مبالغ مدفوعة للعميل وتسجيلها كاسترداد مالي.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
-            self.db.return_dress(rental_id, QDate.currentDate().toString("yyyy-MM-dd"))
-            QMessageBox.information(self, "نجاح", "تم إرجاع الفستان بنجاح.")
+            rental_dict = dict(self.db.get_rental(rental_id))
+            self.db.cancel_rental(rental_id)
+            
+            # Notify owner
+            try:
+                from ui.owner_notify import notify_owner_action
+                notify_owner_action(
+                    db=self.db,
+                    action_type='إلغاء حجز',
+                    record=rental_dict
+                )
+            except Exception as e:
+                print("WhatsApp error:", e)
+                
+            QMessageBox.information(self, "نجاح", "تم إلغاء الحجز بنجاح.")
             self.set_dress(self.dress['id'])
 
     def _print_specific_rental(self, rental_dict):
@@ -993,7 +1125,7 @@ class CashierWidget(QWidget):
         self.stack.setCurrentIndex(1)
 
     def _show_grid(self):
-        self.grid_view.load_data()
+        self.grid_view._reload_with_current_filter()
         self.stack.setCurrentIndex(0)
 
     def load_dresses(self, status_filter=None):

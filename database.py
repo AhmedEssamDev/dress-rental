@@ -533,9 +533,16 @@ class Database:
     def cancel_rental(self, rental_id):
         rental = self.get_rental(rental_id)
         if rental:
+            if rental['paid_amount'] > 0:
+                self.add_refund(rental_id, rental['paid_amount'], 'cash', 'إلغاء حجز - إسترداد مالي')
+            
             self.conn.execute("UPDATE rentals SET status='cancelled' WHERE id=?", (rental_id,))
             self.conn.commit()
-            self.update_dress_status(rental['dress_id'], 'available')
+            
+            # Check if there are other active rentals for this dress
+            active_count = self.conn.execute("SELECT COUNT(*) as n FROM rentals WHERE dress_id=? AND status='active'", (rental['dress_id'],)).fetchone()['n']
+            if active_count == 0:
+                self.update_dress_status(rental['dress_id'], 'available')
 
     def delete_rental(self, rental_id):
         rental = self.get_rental(rental_id)
@@ -634,6 +641,17 @@ class Database:
         c.execute("INSERT INTO payments (rental_id,amount,payment_method,notes) VALUES (?,?,?,?)",
                   (rental_id, amount, method, notes))
         self.conn.execute("""UPDATE rentals SET paid_amount=paid_amount+?,remaining_amount=remaining_amount-?
+                             WHERE id=?""", (amount, amount, rental_id))
+        self.conn.commit()
+        return c.lastrowid
+
+    def add_refund(self, rental_id, amount, method='cash', notes=""):
+        if amount <= 0: return None
+        c = self.conn.cursor()
+        # insert negative payment
+        c.execute("INSERT INTO payments (rental_id,amount,payment_method,notes) VALUES (?,?,?,?)",
+                  (rental_id, -amount, method, notes))
+        self.conn.execute("""UPDATE rentals SET paid_amount=paid_amount-?,remaining_amount=remaining_amount+?
                              WHERE id=?""", (amount, amount, rental_id))
         self.conn.commit()
         return c.lastrowid
